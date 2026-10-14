@@ -1,0 +1,86 @@
+{
+  "uid": "backend-overview",
+  "title": "Backend Overview",
+  "tags": ["platform"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Backend CPU usage (cores, per pod)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "{{pod}}",
+          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"dev\",pod=~\"backend-.*\",container=\"backend\"}[2m]))" }
+      ]
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Backend memory usage (working set, per pod)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "{{pod}}",
+          "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"dev\",pod=~\"backend-.*\",container=\"backend\"})" }
+      ]
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Request rate (req/s, by route)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "{{method}} {{route}}",
+          "expr": "sum by (method, route) (rate(http_requests_total{app=\"backend\",route!~\"/metrics|unmatched\"}[1m]))" },
+        { "refId": "B", "legendFormat": "ingress (all)",
+          "expr": "sum(rate(nginx_ingress_controller_requests[1m]))" }
+      ]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Error rate (5xx share of requests)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "backend 5xx",
+          "expr": "sum(rate(http_requests_total{app=\"backend\",status=~\"5..\"}[1m])) / clamp_min(sum(rate(http_requests_total{app=\"backend\"}[1m])), 0.001)" },
+        { "refId": "B", "legendFormat": "ingress 429 (rate limited) req/s",
+          "expr": "sum(rate(nginx_ingress_controller_requests{status=\"429\"}[1m]))" }
+      ]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Backend replicas over time",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "current", "expr": "kube_deployment_status_replicas{namespace=\"dev\",deployment=\"backend\"}" },
+        { "refId": "B", "legendFormat": "available", "expr": "kube_deployment_status_replicas_available{namespace=\"dev\",deployment=\"backend\"}" },
+        { "refId": "C", "legendFormat": "HPA desired", "expr": "kube_horizontalpodautoscaler_status_desired_replicas{namespace=\"dev\",horizontalpodautoscaler=\"backend-hpa\"}" }
+      ]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Latency p50 / p95 (s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "p50", "expr": "histogram_quantile(0.5, sum by (le) (rate(http_request_duration_seconds_bucket{app=\"backend\"}[2m])))" },
+        { "refId": "B", "legendFormat": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{app=\"backend\"}[2m])))" }
+      ]
+    },
+    {
+      "id": 7, "type": "logs", "title": "Backend logs (Loki)",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending" },
+      "targets": [
+        { "refId": "A", "expr": "{namespace=\"dev\", app=\"backend\"} | json" }
+      ]
+    }
+  ]
+}
