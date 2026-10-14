@@ -1,0 +1,30 @@
+# Queue consumer: same image as the API, different command. Scales independently.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bullmq-worker
+  namespace: dev
+  labels: { app: bullmq-worker }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: bullmq-worker }
+  template:
+    metadata:
+      labels: { app: bullmq-worker }
+    spec:
+      containers:
+        - name: worker
+          image: platform-backend:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "src/worker.js"]
+          envFrom:
+            - configMapRef: { name: app-config }
+            - secretRef: { name: app-secrets }
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 300m, memory: 192Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }
