@@ -1,0 +1,24 @@
+# Writer endpoint (primary). ClusterIP = reachable only inside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: dev
+spec:
+  type: ClusterIP
+  selector: { app: postgres }
+  ports:
+    - { name: pg, port: 5432, targetPort: pg }
+---
+# Reader endpoint. Same pod here (simulation); with a real replica this selector
+# would target the replica pods and nothing else in the app would change.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-read-service
+  namespace: dev
+spec:
+  type: ClusterIP
+  selector: { app: postgres }
+  ports:
+    - { name: pg, port: 5432, targetPort: pg }

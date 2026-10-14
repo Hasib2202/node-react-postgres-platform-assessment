@@ -1,0 +1,15 @@
+# Static PV backed by the kind node's filesystem (local dev only).
+# In a real cluster use a StorageClass + dynamic provisioning (EBS, PD, ...).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /data/postgres-dev
+    type: DirectoryOrCreate

@@ -1,0 +1,29 @@
+# Used by CI: `kustomize edit set namespace/image` retargets every resource at once.
+# app-secrets.yaml is intentionally excluded (created from CI secrets / kind-up.sh).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: dev
+resources:
+  - namespace-dev.yaml
+  - app-configmap.yaml
+  - postgres-initdb-configmap.yaml
+  - postgres-pv.yaml
+  - postgres-pvc.yaml
+  - postgres-deployment.yaml
+  - postgres-service.yaml
+  - redis-deployment.yaml
+  - redis-service.yaml
+  - search-deployment.yaml
+  - search-service.yaml
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - bullmq-worker-deployment.yaml
+  - frontend-deployment.yaml
+  - frontend-service.yaml
+  - ingress-dev.yaml
+  - hpa-backend.yaml
+images:
+  - name: platform-backend
+    newTag: dev
+  - name: platform-frontend
+    newTag: dev
