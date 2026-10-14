@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: dev
+  labels: { app: backend }
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }   # zero-downtime rollouts
+  selector:
+    matchLabels: { app: backend }
+  template:
+    metadata:
+      labels: { app: backend }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4000"
+        prometheus.io/path: /metrics
+    spec:
+      containers:
+        - name: backend
+          image: platform-backend:dev        # replaced by CI via kustomize `images:`
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 4000 }
+          envFrom:
+            - configMapRef: { name: app-config }
+            - secretRef: { name: app-secrets }
+          # Liveness: process only. Readiness: needs the DB (pod leaves the Service
+          # endpoints if the DB is unreachable but is NOT restarted).
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /api/ready, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:                          # requests are required for HPA % targets
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }

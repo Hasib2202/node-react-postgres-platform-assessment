@@ -1,0 +1,20 @@
+# Non-sensitive configuration shared by backend, worker and frontend.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: dev
+data:
+  # Database (write = primary, read = replica endpoint; see Task 5 notes in README)
+  DB_HOST: postgres-service
+  DB_PORT: "5432"
+  DB_NAME: appdb
+  POSTGRES_DB: appdb
+  # Platform services - cluster-internal DNS names only
+  REDIS_HOST: redis-service
+  REDIS_PORT: "6379"
+  QUEUE_NAME: todo-events
+  SEARCH_URL: http://search-service:9200
+  # Frontend: same-origin path routed by the Ingress to backend-service
+  API_BASE_URL: /api
+  PORT: "4000"
