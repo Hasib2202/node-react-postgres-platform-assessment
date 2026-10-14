@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1
+# Build context: repository root  (docker build -f Dockerfile.backend .)
+
+# ---- stage 1: production dependencies only ---------------------------------
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY backend/package.json backend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+
+# ---- stage 2: slim runtime ---------------------------------------------------
+FROM node:20-alpine AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY backend/package.json ./
+COPY backend/src ./src
+# Run as the unprivileged `node` user that ships with the image.
+USER node
+EXPOSE 4000
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s \
+  CMD wget -qO- http://127.0.0.1:4000/api/health || exit 1
+# The same image runs the worker: override with `node src/worker.js`.
+CMD ["node", "src/index.js"]

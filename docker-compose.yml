@@ -1,0 +1,110 @@
+# Start everything:  cp .env.example .env && docker compose up --build
+name: node-react-platform
+
+x-backend-env: &backend-env
+  DB_HOST: ${DB_HOST}
+  DB_PORT: ${DB_PORT}
+  DB_USER: ${POSTGRES_USER}
+  DB_PASSWORD: ${POSTGRES_PASSWORD}
+  DB_NAME: ${POSTGRES_DB}
+  # Task 5 - simulated read/write cluster. Both point at the same Postgres here;
+  # in Kubernetes/production DB_READ_URL targets a replica endpoint.
+  DB_WRITE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}/${POSTGRES_DB}
+  DB_READ_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}/${POSTGRES_DB}
+  REDIS_HOST: ${REDIS_HOST}
+  REDIS_PORT: ${REDIS_PORT}
+  SEARCH_URL: ${SEARCH_URL}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data          # survives `docker compose down` / restarts
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend-net]                       # no published port: DB is internal only
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]   # cache/queue only in dev
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend-net]
+
+  search:
+    image: opensearchproject/opensearch:2.15.0
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"             # dev mode only
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms256m -Xmx256m
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+    volumes:
+      - searchdata:/usr/share/opensearch/data
+    networks: [backend-net]
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+      PORT: 4000
+      CORS_ORIGIN: ${CORS_ORIGIN}
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [backend-net, frontend-net]
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    command: ["node", "src/worker.js"]
+    environment: *backend-env
+    healthcheck:
+      disable: true                               # no HTTP port on the worker
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [backend-net]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    environment:
+      API_BASE_URL: ${API_BASE_URL}
+    ports:
+      - "3000:8080"
+    depends_on:
+      - backend
+    networks: [frontend-net]
+
+networks:
+  frontend-net:
+  backend-net:
+
+volumes:
+  pgdata:
+  searchdata:
