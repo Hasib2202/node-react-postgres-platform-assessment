@@ -1,0 +1,42 @@
+# Two Ingress objects on one host so rate limiting only applies to the API path.
+# Requires ingress-nginx; add to your hosts file:  127.0.0.1 node-react.local
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend-ingress
+  namespace: dev
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: node-react.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: frontend-service, port: { number: 80 } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backend-ingress
+  namespace: dev
+  annotations:
+    # Rate limiting (per client IP, enforced by NGINX at the edge):
+    #  - 20 req/s sustained; bursts up to 20*5=100 are absorbed by the burst multiplier
+    #  - max 30 concurrent connections per IP
+    # Excess requests get HTTP 429 (limit-req-status-code is set in scripts/kind-up.sh).
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+    nginx.ingress.kubernetes.io/limit-connections: "30"
+    nginx.ingress.kubernetes.io/proxy-body-size: "64k"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: node-react.local
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service: { name: backend-service, port: { number: 80 } }
