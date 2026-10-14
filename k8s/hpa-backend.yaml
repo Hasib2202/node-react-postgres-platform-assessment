@@ -1,0 +1,25 @@
+# Needs metrics-server (installed by scripts/kind-up.sh).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: dev
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 60 }   # % of the 100m request
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies: [{ type: Pods, value: 2, periodSeconds: 30 }]
+    scaleDown:
+      stabilizationWindowSeconds: 120   # avoid flapping after a load test
+      policies: [{ type: Pods, value: 1, periodSeconds: 60 }]
