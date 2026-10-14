@@ -1,0 +1,170 @@
+name: ci-cd
+
+# Branch -> environment mapping (namespace):
+#   master          -> dev
+#   pre-release/v*  -> preprod
+#   release/v*      -> release
+on:
+  push:
+    branches: [master, 'pre-release/v*', 'release/v*']
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+  packages: write        # push to GHCR with the built-in GITHUB_TOKEN
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # ------------------------------------------------------------------ build + test
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+      - name: Backend - install, test
+        working-directory: backend
+        run: |
+          npm ci
+          npm test
+      - name: Frontend - install, build (build is the validation)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Validate Kubernetes manifests render
+        run: kubectl kustomize k8s > /dev/null
+
+  # ------------------------------------------------------------------ images
+  images:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      namespace: ${{ steps.meta.outputs.namespace }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lower-case image prefix (GHCR requires lower-case names)
+        run: echo "IMAGE_PREFIX=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Compute tag and target namespace
+        id: meta
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          case "$BRANCH" in
+            master)          NS=dev ;;
+            pre-release/v*)  NS=preprod ;;
+            release/v*)      NS=release ;;
+            *) echo "no environment for branch $BRANCH"; exit 1 ;;
+          esac
+          # Docker tags cannot contain "/" -> branch name sanitised + short SHA
+          SAFE_BRANCH="$(echo "$BRANCH" | tr '/' '-')"
+          TAG="${SAFE_BRANCH}-${GITHUB_SHA::7}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "namespace=$NS" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.backend
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/backend:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.frontend
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/frontend:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  # ------------------------------------------------------------------ deploy
+  deploy:
+    needs: images
+    runs-on: ubuntu-latest
+    # GitHub Environments hold per-environment secrets (and can require approval
+    # for `release`). The environment name equals the namespace.
+    environment: ${{ needs.images.outputs.namespace }}
+    env:
+      NS: ${{ needs.images.outputs.namespace }}
+      TAG: ${{ needs.images.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Lower-case image prefix (GHCR requires lower-case names)
+        run: echo "IMAGE_PREFIX=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Configure kubeconfig (from environment secret)
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_B64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl cluster-info
+
+      - name: Create/refresh application secret (never stored in Git)
+        run: |
+          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n "$NS" create secret generic app-secrets \
+            --from-literal=POSTGRES_USER="${{ secrets.POSTGRES_USER }}" \
+            --from-literal=POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
+            --from-literal=DB_USER="${{ secrets.POSTGRES_USER }}" \
+            --from-literal=DB_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
+            --from-literal=DB_WRITE_URL="postgres://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@postgres-service:5432/appdb" \
+            --from-literal=DB_READ_URL="postgres://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@postgres-read-service:5432/appdb" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Render manifests for this environment
+        run: |
+          cd k8s
+          kubectl kustomize . > /dev/null   # fail fast on invalid kustomization
+          # kustomize (bundled in kubectl) edits: namespace + immutable image tags
+          curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz" | tar xz
+          ./kustomize edit set namespace "$NS"
+          ./kustomize edit set image \
+            platform-backend=${{ env.IMAGE_PREFIX }}/backend:$TAG \
+            platform-frontend=${{ env.IMAGE_PREFIX }}/frontend:$TAG
+          # Cluster-scoped PV must be unique per environment; host name differs per env.
+          ./kustomize build . \
+            | sed -E "s#postgres-pv\b#postgres-pv-$NS#g; s#/data/postgres-dev#/data/postgres-$NS#g" \
+            | sed -E "s#host: node-react.local#host: $NS.node-react.local#g" \
+            > ../rendered.yaml
+          # The registry pull secret is only needed when the GHCR packages are private.
+
+      - name: Deploy
+        run: kubectl apply -f rendered.yaml
+
+      - name: Wait for rollout (auto-rollback on failure)
+        run: |
+          for d in backend frontend bullmq-worker; do
+            if ! kubectl -n "$NS" rollout status "deployment/$d" --timeout=180s; then
+              echo "::error::$d failed to roll out - rolling back"
+              kubectl -n "$NS" rollout undo "deployment/$d"
+              kubectl -n "$NS" rollout status "deployment/$d" --timeout=120s
+              exit 1
+            fi
+          done
