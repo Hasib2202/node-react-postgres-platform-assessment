@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+# Build context: repository root  (docker build -f Dockerfile.frontend .)
+
+# ---- stage 1: build the static bundle ---------------------------------------
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# ---- stage 2: static files behind unprivileged nginx -------------------------
+FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
+# Executed by the base image's entrypoint: writes /config.js from $API_BASE_URL.
+COPY --chmod=755 frontend/docker-entrypoint.sh /docker-entrypoint.d/40-runtime-config.sh
+# uid 101 = nginx user; needs write access to html/ to generate config.js.
+COPY --from=build --chown=101:101 /app/dist /usr/share/nginx/html
+ENV API_BASE_URL=/api
+EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=3s CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1

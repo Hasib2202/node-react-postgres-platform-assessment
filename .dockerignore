@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/npm-debug.log*
+.git
+.github
+.env
+.env.*
+!.env.example
+k8s
+observability
+docs
+scripts
+*.md
+docker-compose*.yml
+Dockerfile.*
